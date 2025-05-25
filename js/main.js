@@ -4,14 +4,13 @@ import { Water } from 'three/addons/objects/Water.js';
 import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
 let scene, camera, renderer, water, controls, clock, sun, sand, waterVolume;
-let causticTexture;
+let causticTexture, lightShafts = []; // lightShafts変数を宣言
 let fishes = [], plants = [], rocks = [];
 
 // 設定パラメータを水槽表現用に調整
 const params = {
     waterColor: '#5b9bd5',   // 少し青緑よりの水色
     waterOpacity: 0.2,       // 透明度を上げる
-    // lightIntensity, numLightShafts, lightShaftOpacityを削除
     sunY: 30,
     cameraY: 8, 
     cameraZ: 16,
@@ -19,6 +18,9 @@ const params = {
     fishCount: 8,           // 魚の数
     plantDensity: 0.7,      // 水草の密度
     plantVariety: 3,        // 水草の種類の数
+    lightIntensity: 1.5,    // 光の強度
+    lightShaftOpacity: 0.4,  // 光柱の不透明度（追加）
+    numLightShafts: 5       // 光柱の数（追加）
 };
 
 // 砂地生成関数 (シンプルに保持)
@@ -38,305 +40,57 @@ function generateSandGeometry(size, segments, height) {
     return geometry;
 }
 
-function init() {
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111122); // 暗い背景でコントラストを強調
-    clock = new THREE.Clock();
-
-    // カメラ
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, params.cameraY, params.cameraZ);
-
-    // レンダラー
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    document.body.appendChild(renderer.domElement);
-
-    // コントロール
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.target.set(0, 0, 0);
-
-    // シンプルな環境光のみを残す
-    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+// ウィローモスを生成する関数
+function createWillowMoss(size, mossColor) {
+    const moss = new THREE.Group();
     
-    // 太陽光の参照は残す（Waterオブジェクトで使用）
-    sun = new THREE.Vector3(0, params.sunY, 0);
-
-    // 水槽サイズを定義
-    const aquariumSize = 20;
-    const aquariumHeight = 8;
-
-    // 水のボリューム表現をよりリアルに
-    const waterVolumeGeometry = new THREE.BoxGeometry(aquariumSize, aquariumHeight, aquariumSize);
-    const waterVolumeMaterial = new THREE.MeshPhysicalMaterial({
-        color: new THREE.Color(params.waterColor),
-        metalness: 0.0,
-        roughness: 0.0,
-        transmission: 0.99,        // ほぼ完全に透明に
-        transparent: true,
-        opacity: params.waterOpacity,
-        ior: 1.33,                 // 水の屈折率
-        attenuationColor: new THREE.Color(0x056f92), // 水の光吸収色
-        attenuationDistance: 15.0, // 光の減衰距離
-    });
-    waterVolume = new THREE.Mesh(waterVolumeGeometry, waterVolumeMaterial);
-    waterVolume.position.y = aquariumHeight / 2;
-    scene.add(waterVolume);
-
-    // より複雑な砂地
-    const sandSize = aquariumSize - 0.5;  // 水槽よりやや小さく
-    const sandSegments = 80;
-    const sandHeight = 0.3;
-    const sandGeometry = generateSandGeometry(sandSize, sandSegments, sandHeight);
-    const sandMaterial = new THREE.MeshStandardMaterial({
-        color: 0xfbecc4,
-        roughness: 0.8,
-        metalness: 0.1,
-    });
-    sand = new THREE.Mesh(sandGeometry, sandMaterial);
-    sand.rotation.x = -Math.PI / 2;
-    sand.position.y = 0.1;
-    scene.add(sand);
-
-    // 水面
-    const waterGeometry = new THREE.PlaneGeometry(aquariumSize - 0.5, aquariumSize - 0.5, 32, 32);
-    water = new Water(waterGeometry, {
-        textureWidth: 512,
-        textureHeight: 512,
-        waterNormals: new THREE.TextureLoader().load(
-            'https://threejs.org/examples/textures/waternormals.jpg',
-            function (texture) {
-                texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-            }
-        ),
-        sunDirection: new THREE.Vector3(0, 1, 0),
-        sunColor: 0xffffff,
-        waterColor: new THREE.Color(params.waterColor),
-        distortionScale: 1.5,
-        fog: false,
-    });
-    water.rotation.x = -Math.PI / 2;
-    water.position.y = aquariumHeight - 0.1;
-    scene.add(water);
+    // モスの粒子の数
+    const particleCount = Math.floor(size * 100);
     
-    // 上からの照明
-    const topLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    topLight.position.set(0, 25, 0);
-    topLight.target.position.set(0, 0, 0);
-    scene.add(topLight);
-    scene.add(topLight.target);
-
-    // コースティクステクスチャをロード（光の集束パターン用）
-    const textureLoader = new THREE.TextureLoader();
-    causticTexture = textureLoader.load(
-        'https://raw.githubusercontent.com/spite/codevember-2016/master/caustics/assets/caustic_01.jpg',
-        function(texture) {
-            texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-            texture.repeat.set(5, 5);
-            
-            // コースティクスの床への投影
-            const causticPlane = new THREE.Mesh(
-                new THREE.PlaneGeometry(aquariumSize - 1, aquariumSize - 1),
-                new THREE.MeshBasicMaterial({
-                    map: texture,
-                    transparent: true,
-                    opacity: 0.7,
-                    blending: THREE.AdditiveBlending,
-                })
-            );
-            causticPlane.rotation.x = -Math.PI / 2;
-            causticPlane.position.y = 0.15; // 砂の上に配置
-            scene.add(causticPlane);
-        }
-    );
+    // パーティクル用のジオメトリ
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    const scales = new Float32Array(particleCount);
+    const colors = new Float32Array(particleCount * 3);
     
-    // 光の光柱を削除
-
-    // GUI拡張
-    const gui = new GUI();
-    gui.addColor(params, 'waterColor').name('Water Color').onChange(val => {
-        water.material.uniforms.waterColor.value.set(val);
-        waterVolume.material.color.set(val);
-    });
-
-    gui.add(params, 'waterOpacity', 0.05, 0.5).name('Water Density').onChange(val => {
-        waterVolume.material.opacity = val;
-    });
-    
-    // カメラ位置を水槽の中心に近づける
-    camera.position.set(0, 4, 12); // 高さを下げ、距離も近づける
-    controls.target.set(0, 3, 0); // 水槽の中央部分を見るように
-    controls.update();
-
-    // 水草と岩の制御
-    const environmentFolder = gui.addFolder('Environment');
-    
-    // 水草の密度と数を調整可能に
-    environmentFolder.add(params, 'plantDensity', 0.1, 2.0).name('Plant Density').onChange(val => {
-        createPlants(aquariumSize);
-        createRocks(aquariumSize); // 岩も再配置
-    });
-    
-    // 水草の種類のバリエーションを制御するパラメータを追加
-    params.plantVariety = 3; // デフォルトは3種類
-    environmentFolder.add(params, 'plantVariety', 1, 5).step(1).name('Plant Variety').onChange(val => {
-        createPlants(aquariumSize);
-    });
-    
-    // 鮮やかな黄緑色の水草の色
-    const vibrantGreen = new THREE.Color(0x7cfc00); // 明るい黄緑色
-    environmentFolder.addColor({plantColor: '#7cfc00'}, 'plantColor').name('Plant Color').onChange(val => {
-        // 既存の水草の色を変更
-        plants.forEach(plant => {
-            plant.traverse(child => {
-                if (child instanceof THREE.Mesh && child.material) {
-                    if (child.material.color) {
-                        // 茎と葉で色の違いを保持しつつ色相を変更
-                        if (child.material.color.g > 0.5) { // 葉の部分
-                            child.material.color.set(val);
-                        } else { // 茎の部分
-                            // 茎は少し暗めに
-                            const stemColor = new THREE.Color(val);
-                            stemColor.multiplyScalar(0.7);
-                            child.material.color.set(stemColor);
-                        }
-                    }
-                } else if (child instanceof THREE.Points && child.material) {
-                    // ウィローモスの場合
-                    child.material.color.set(val);
-                }
-            });
-        });
-    });
-
-    // 初期化時に水槽の要素を追加（これが重要！）
-    createFishes(aquariumSize, aquariumHeight);
-    createPlants(aquariumSize, vibrantGreen); // 鮮やかな黄緑色を渡す
-    createRocks(aquariumSize);
-
-    window.addEventListener('resize', onWindowResize);
-    
-    // カメラ位置監視関数を追加
-    controls.addEventListener('change', function() {
-        const isUnderwater = camera.position.y < water.position.y;
-        if (isUnderwater) {
-            scene.fog = new THREE.FogExp2(0x004466, 0.05); // 水中の霧
-            scene.background = new THREE.Color(0x004466); // 水中の背景色
-        } else {
-            scene.fog = null;
-            scene.background = new THREE.Color(0x111122); // 標準の背景色
-        }
-    });
-    
-    animate();
-}
-
-// 光の光柱を作成する関数
-function createLightShafts(aquariumSize, aquariumHeight) {
-    // 既存の光柱をクリア
-    lightShafts.forEach(shaft => scene.remove(shaft));
-    lightShafts = [];
-    
-    const lightShaftMaterial = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        transparent: true,
-        opacity: params.lightShaftOpacity,
-        blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-    });
-    
-    // 複数の光柱を作成
-    for (let i = 0; i < params.numLightShafts; i++) {
-        // ランダムな位置
+    // ランダムな点を半球状に配置
+    for (let i = 0; i < particleCount; i++) {
+        // ランダムな角度と距離（半球状）
         const angle = Math.random() * Math.PI * 2;
-        const radius = Math.random() * (aquariumSize * 0.3);
-        const x = Math.sin(angle) * radius;
-        const z = Math.cos(angle) * radius;
+        const radius = size * Math.random();
+        const height = size * 0.2 * Math.random();
         
-        // 円錐で光柱を表現
-        const height = aquariumHeight - 0.5;
-        const topRadius = 0.1 + Math.random() * 0.2;
-        const bottomRadius = 0.5 + Math.random() * 0.8;
+        positions[i * 3] = Math.cos(angle) * radius;
+        positions[i * 3 + 1] = height;
+        positions[i * 3 + 2] = Math.sin(angle) * radius;
         
-        const geometry = new THREE.CylinderGeometry(
-            topRadius, bottomRadius, height, 16, 8, true
-        );
+        // サイズのバリエーション
+        scales[i] = 0.03 + Math.random() * 0.03;
         
-        const lightShaft = new THREE.Mesh(geometry, lightShaftMaterial.clone());
-        lightShaft.position.set(x, aquariumHeight / 2 - 0.5, z);
-        
-        // 各光柱の性質を保存
-        lightShaft.userData = {
-            initialPos: { x, z },
-            phase: Math.random() * Math.PI * 2,
-            speed: 0.2 + Math.random() * 0.2,
-            amplitude: 0.05 + Math.random() * 0.1,
-        };
-        
-        scene.add(lightShaft);
-        lightShafts.push(lightShaft);
+        // 色の微妙なバリエーション
+        const shade = 0.5 + Math.random() * 0.3;
+        colors[i * 3] = 0.1 * shade;
+        colors[i * 3 + 1] = 0.5 * shade;
+        colors[i * 3 + 2] = 0.1 * shade;
     }
-}
-
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-function animate() {
-    requestAnimationFrame(animate);
-
-    const elapsedTime = clock.getElapsedTime();
-    water.material.uniforms['time'].value = elapsedTime;
     
-    // 光柱のアニメーション部分を削除
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('scale', new THREE.BufferAttribute(scales, 1));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     
-    // 魚のアニメーション
-    animateFishes(elapsedTime);
-
-    controls.update();
-    renderer.render(scene, camera);
-}
-
-// 魚を作成する関数
-function createFishes(aquariumSize, aquariumHeight) {
-    const fishColors = [
-        { body: 0xff5a00, fin: 0xff8c40 },  // オレンジ＆イエロー（ゴールデンファイヤー）
-        { body: 0x3a86ff, fin: 0x00f5d4 },  // 青＆水色（ブルーネオン）
-        { body: 0xff006e, fin: 0x8338ec },  // ピンク＆紫（レッドフレーム）
-        { body: 0xffbe0b, fin: 0xfb5607 },  // 黄色＆オレンジ（サンバースト）
-        { body: 0x00bbf9, fin: 0xfee440 },  // 水色＆黄色（トロピカルダスク）
-        { body: 0x9b5de5, fin: 0xf15bb5 },  // 紫＆ピンク（ミスティックグロー）
-    ];
+    // シェーダーマテリアル
+    const material = new THREE.PointsMaterial({
+        color: mossColor || 0x4a7834,
+        size: 0.05,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.8
+    });
     
-    // 初期の魚を削除
-    fishes.forEach(fish => scene.remove(fish));
-    fishes = [];
+    const points = new THREE.Points(geometry, material);
+    moss.add(points);
     
-    // 新しい魚を追加
-    for (let i = 0; i < params.fishCount; i++) {
-        const colorIndex = Math.floor(Math.random() * fishColors.length);
-        const { body, fin } = fishColors[colorIndex];
-        
-        const size = 0.6 + Math.random() * 0.4;
-        
-        // 水槽内のランダムな位置
-        const x = (Math.random() - 0.5) * (aquariumSize - 2);
-        const y = 1 + Math.random() * (aquariumHeight - 2);
-        const z = (Math.random() - 0.5) * (aquariumSize - 2);
-        
-        const position = new THREE.Vector3(x, y, z);
-        const fish = createFish(size, body, fin, position);
-        
-        // 魚の向きをランダムに
-        fish.rotation.y = Math.random() * Math.PI * 2;
-        
-        scene.add(fish);
-        fishes.push(fish);
-    }
+    return moss;
 }
 
 // 魚のジオメトリを作る関数
@@ -637,6 +391,97 @@ function createVallisneria(height, radius, plantColor) {
     return plant;
 }
 
+// 溶岩石を生成する関数
+function createLavaRock(size) {
+    const rock = new THREE.Group();
+    
+    // より自然な岩の形状
+    const baseGeometry = new THREE.DodecahedronGeometry(size, 2); // より滑らかな形状
+    
+    // 頂点をランダムに変形 - より自然な凹凸に
+    const positionAttribute = baseGeometry.getAttribute('position');
+    
+    for (let i = 0; i < positionAttribute.count; i++) {
+        const x = positionAttribute.getX(i);
+        const y = positionAttribute.getY(i);
+        const z = positionAttribute.getZ(i);
+        
+        // よりランダムで自然な変形（特に上部を尖らせる）
+        const distortion = 0.15; // 変形度合いを少し抑える
+        const height = Math.sqrt(x * x + z * z) / size; // 中心からの距離
+        const heightFactor = 1.0 - height * 0.5; // 中心ほど変形を強く
+        
+        const randomX = x * (1 + (Math.random() - 0.5) * distortion * heightFactor);
+        const randomY = y * (1 + (Math.random() - 0.3) * distortion * heightFactor); // 上方向に少し伸ばす
+        const randomZ = z * (1 + (Math.random() - 0.5) * distortion * heightFactor);
+        
+        positionAttribute.setXYZ(i, randomX, randomY, randomZ);
+    }
+    
+    baseGeometry.computeVertexNormals();
+    
+    // マテリアル - より自然な表面質感
+    const material = new THREE.MeshStandardMaterial({
+        color: 0x333333,
+        roughness: 0.9,
+        metalness: 0.1,
+        flatShading: true,
+        emissive: 0x120012, // わずかな紫の自己発光
+        emissiveIntensity: 0.05
+    });
+    
+    const baseMesh = new THREE.Mesh(baseGeometry, material);
+    rock.add(baseMesh);
+    
+    // 少数の特徴的な突起だけを追加（多すぎない）
+    const bumpCount = Math.floor(3 + Math.random() * 3); // より少なく
+    
+    for (let i = 0; i < bumpCount; i++) {
+        // より大きく、特徴的な突起
+        const bumpSize = size * (0.2 + Math.random() * 0.25);
+        const bumpGeometry = new THREE.DodecahedronGeometry(bumpSize, 1);
+        
+        // 底面に近い部分（Y座標がマイナス側）に突起を集中
+        const angle1 = Math.random() * Math.PI * 2;
+        const angle2 = Math.random() * Math.PI * 0.3 + Math.PI * 0.5; // 下半分にのみ配置
+        const radius = size * 0.85;
+        
+        const x = Math.sin(angle2) * Math.cos(angle1) * radius;
+        const y = -Math.cos(angle2) * radius * 0.7; // 下側に押し下げる
+        const z = Math.sin(angle2) * Math.sin(angle1) * radius;
+        
+        // 突起も歪ませる
+        const bumpPositionAttr = bumpGeometry.getAttribute('position');
+        for (let j = 0; j < bumpPositionAttr.count; j++) {
+            const bx = bumpPositionAttr.getX(j);
+            const by = bumpPositionAttr.getY(j);
+            const bz = bumpPositionAttr.getZ(j);
+            
+            const bumpDistortion = 0.1;
+            bumpPositionAttr.setXYZ(j,
+                bx * (1 + (Math.random() - 0.5) * bumpDistortion),
+                by * (1 + (Math.random() - 0.3) * bumpDistortion),
+                bz * (1 + (Math.random() - 0.5) * bumpDistortion)
+            );
+        }
+        bumpGeometry.computeVertexNormals();
+        
+        const bump = new THREE.Mesh(bumpGeometry, material);
+        bump.position.set(x, y, z);
+        
+        // 回転をランダムに設定
+        bump.rotation.set(
+            Math.random() * Math.PI,
+            Math.random() * Math.PI,
+            Math.random() * Math.PI
+        );
+        
+        rock.add(bump);
+    }
+    
+    return rock;
+}
+
 // 水草（全種類）を作成する関数
 function createPlants(aquariumSize, plantColor) {
     // 既存の水草を削除
@@ -705,149 +550,141 @@ function createPlants(aquariumSize, plantColor) {
     }
 }
 
-// ウィローモスを生成する関数
-function createWillowMoss(size, mossColor) {
-    const moss = new THREE.Group();
+// 岩を生成する関数
+function createRocks(aquariumSize) {
+    // 既存の岩を削除
+    rocks.forEach(rock => scene.remove(rock));
+    rocks = [];
     
-    // モスの粒子の数
-    const particleCount = Math.floor(size * 100);
-    
-    // パーティクル用のジオメトリ
-    const geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(particleCount * 3);
-    const scales = new Float32Array(particleCount);
-    const colors = new Float32Array(particleCount * 3);
-    
-    // ランダムな点を半球状に配置
-    for (let i = 0; i < particleCount; i++) {
-        // ランダムな角度と距離（半球状）
-        const angle = Math.random() * Math.PI * 2;
-        const radius = size * Math.random();
-        const height = size * 0.2 * Math.random();
+    // 大きな溶岩石を配置
+    const largeRockCount = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < largeRockCount; i++) {
+        const x = (Math.random() - 0.5) * (aquariumSize - 4);
+        const z = (Math.random() - 0.5) * (aquariumSize - 4);
         
-        positions[i * 3] = Math.cos(angle) * radius;
-        positions[i * 3 + 1] = height;
-        positions[i * 3 + 2] = Math.sin(angle) * radius;
+        const size = 0.8 + Math.random() * 0.6;
+        const rock = createLavaRock(size);
         
-        // サイズのバリエーション
-        scales[i] = 0.03 + Math.random() * 0.03;
+        // ランダムな回転
+        rock.rotation.y = Math.random() * Math.PI * 2;
+        rock.position.set(x, size * 0.5, z);
         
-        // 色の微妙なバリエーション
-        const shade = 0.5 + Math.random() * 0.3;
-        colors[i * 3] = 0.1 * shade;
-        colors[i * 3 + 1] = 0.5 * shade;
-        colors[i * 3 + 2] = 0.1 * shade;
+        scene.add(rock);
+        rocks.push(rock);
     }
     
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('scale', new THREE.BufferAttribute(scales, 1));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    // 小さな石を配置
+    const smallRockCount = 4 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < smallRockCount; i++) {
+        const x = (Math.random() - 0.5) * (aquariumSize - 2);
+        const z = (Math.random() - 0.5) * (aquariumSize - 2);
+        
+        const size = 0.2 + Math.random() * 0.3;
+        const rock = createLavaRock(size);
+        
+        // ランダムな回転
+        rock.rotation.y = Math.random() * Math.PI * 2;
+        rock.position.set(x, size * 0.5, z);
+        
+        scene.add(rock);
+        rocks.push(rock);
+    }
     
-    // シェーダーマテリアル
-    const material = new THREE.PointsMaterial({
-        color: mossColor || 0x4a7834,
-        size: 0.05,
-        sizeAttenuation: true,
-        transparent: true,
-        opacity: 0.8
-    });
-    
-    const points = new THREE.Points(geometry, material);
-    moss.add(points);
-    
-    return moss;
+    // いくつかの石にウィローモスを配置
+    const mossColor = new THREE.Color(0x7cfc00); // 鮮やかな黄緑色
+    for (let i = 0; i < largeRockCount; i++) {
+        if (Math.random() > 0.5) {
+            const rock = rocks[i];
+            const position = rock.position.clone();
+            
+            const moss = createWillowMoss(0.3 + Math.random() * 0.2, mossColor);
+            moss.position.copy(position);
+            moss.position.y += 0.5;
+            
+            scene.add(moss);
+            plants.push(moss);
+        }
+    }
 }
 
-// 溶岩石を生成する関数 - よりスタイリッシュに改良
-function createLavaRock(size) {
-    const rock = new THREE.Group();
+// 光の光柱を作成する関数
+function createLightShafts(aquariumSize, aquariumHeight) {
+    // 既存の光柱をクリア
+    lightShafts.forEach(shaft => scene.remove(shaft));
+    lightShafts = [];
     
-    // より自然な岩の形状
-    const baseGeometry = new THREE.DodecahedronGeometry(size, 2); // より滑らかな形状
-    
-    // 頂点をランダムに変形 - より自然な凹凸に
-    const positionAttribute = baseGeometry.getAttribute('position');
-    
-    for (let i = 0; i < positionAttribute.count; i++) {
-        const x = positionAttribute.getX(i);
-        const y = positionAttribute.getY(i);
-        const z = positionAttribute.getZ(i);
-        
-        // よりランダムで自然な変形（特に上部を尖らせる）
-        const distortion = 0.15; // 変形度合いを少し抑える
-        const height = Math.sqrt(x * x + z * z) / size; // 中心からの距離
-        const heightFactor = 1.0 - height * 0.5; // 中心ほど変形を強く
-        
-        const randomX = x * (1 + (Math.random() - 0.5) * distortion * heightFactor);
-        const randomY = y * (1 + (Math.random() - 0.3) * distortion * heightFactor); // 上方向に少し伸ばす
-        const randomZ = z * (1 + (Math.random() - 0.5) * distortion * heightFactor);
-        
-        positionAttribute.setXYZ(i, randomX, randomY, randomZ);
-    }
-    
-    baseGeometry.computeVertexNormals();
-    
-    // マテリアル - より自然な表面質感
-    const material = new THREE.MeshStandardMaterial({
-        color: 0x333333,
-        roughness: 0.9,
-        metalness: 0.1,
-        flatShading: true,
-        // 紫色の光を受けやすく
-        emissive: 0x120012, // わずかな紫の自己発光
-        emissiveIntensity: 0.05
+    const lightShaftMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: params.lightShaftOpacity,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
     });
     
-    const baseMesh = new THREE.Mesh(baseGeometry, material);
-    rock.add(baseMesh);
-    
-    // 少数の特徴的な突起だけを追加（多すぎない）
-    const bumpCount = Math.floor(3 + Math.random() * 3); // より少なく
-    
-    for (let i = 0; i < bumpCount; i++) {
-        // より大きく、特徴的な突起
-        const bumpSize = size * (0.2 + Math.random() * 0.25);
-        const bumpGeometry = new THREE.DodecahedronGeometry(bumpSize, 1);
+    // 複数の光柱を作成
+    for (let i = 0; i < params.numLightShafts; i++) {
+        // ランダムな位置
+        const angle = Math.random() * Math.PI * 2;
+        const radius = Math.random() * (aquariumSize * 0.3);
+        const x = Math.sin(angle) * radius;
+        const z = Math.cos(angle) * radius;
         
-        // 底面に近い部分（Y座標がマイナス側）に突起を集中
-        const angle1 = Math.random() * Math.PI * 2;
-        const angle2 = Math.random() * Math.PI * 0.3 + Math.PI * 0.5; // 下半分にのみ配置
-        const radius = size * 0.85;
+        // 円錐で光柱を表現
+        const height = aquariumHeight - 0.5;
+        const topRadius = 0.1 + Math.random() * 0.2;
+        const bottomRadius = 0.5 + Math.random() * 0.8;
         
-        const x = Math.sin(angle2) * Math.cos(angle1) * radius;
-        const y = -Math.cos(angle2) * radius * 0.7; // 下側に押し下げる
-        const z = Math.sin(angle2) * Math.sin(angle1) * radius;
+        const geometry = new THREE.CylinderGeometry(topRadius, bottomRadius, height, 16, 8, true);
         
-        // 突起も歪ませる
-        const bumpPositionAttr = bumpGeometry.getAttribute('position');
-        for (let j = 0; j < bumpPositionAttr.count; j++) {
-            const bx = bumpPositionAttr.getX(j);
-            const by = bumpPositionAttr.getY(j);
-            const bz = bumpPositionAttr.getZ(j);
-            
-            const bumpDistortion = 0.1;
-            bumpPositionAttr.setXYZ(j,
-                bx * (1 + (Math.random() - 0.5) * bumpDistortion),
-                by * (1 + (Math.random() - 0.3) * bumpDistortion),
-                bz * (1 + (Math.random() - 0.5) * bumpDistortion)
-            );
-        }
-        bumpGeometry.computeVertexNormals();
+        const lightShaft = new THREE.Mesh(geometry, lightShaftMaterial.clone());
+        lightShaft.position.set(x, aquariumHeight / 2 - 0.5, z);
         
-        const bump = new THREE.Mesh(bumpGeometry, material);
-        bump.position.set(x, y, z);
+        // 各光柱の性質を保存
+        lightShaft.userData = {
+            initialPos: { x, z },
+            phase: Math.random() * Math.PI * 2,
+            speed: 0.2 + Math.random() * 0.2,
+            amplitude: 0.05 + Math.random() * 0.1,
+        };
         
-        // 回転をランダムに設定
-        bump.rotation.set(
-            Math.random() * Math.PI,
-            Math.random() * Math.PI,
-            Math.random() * Math.PI
-        );
-        
-        rock.add(bump);
+        scene.add(lightShaft);
+        lightShafts.push(lightShaft);
     }
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    const elapsedTime = clock.getElapsedTime();
+    water.material.uniforms['time'].value = elapsedTime;
     
-    return rock;
+    // 光柱のアニメーション
+    lightShafts.forEach(shaft => {
+        const { initialPos, phase, speed, amplitude } = shaft.userData;
+        
+        // 光柱がゆっくりと揺れる動き
+        const xOffset = Math.sin(elapsedTime * speed + phase) * amplitude;
+        const zOffset = Math.cos(elapsedTime * speed + phase * 1.3) * amplitude;
+        
+        shaft.position.x = initialPos.x + xOffset;
+        shaft.position.z = initialPos.z + zOffset;
+        
+        // 光の強度がわずかに変化
+        const opacityVariation = Math.sin(elapsedTime * 0.3 + phase) * 0.1 + 0.9;
+        shaft.material.opacity = params.lightShaftOpacity * opacityVariation;
+    });
+    
+    // 魚のアニメーション
+    animateFishes(elapsedTime);
+
+    controls.update();
+    renderer.render(scene, camera);
 }
 
 // 魚のアニメーション
@@ -912,114 +749,282 @@ function animateFishes(time) {
     });
 }
 
-// 水草（ハイグロフィア）を作成する関数
-function createPlants(aquariumSize, plantColor) {
-    // 既存の水草を削除
-    plants.forEach(plant => scene.remove(plant));
-    plants = [];
+// 魚を作成する関数を追加
+function createFishes(aquariumSize, aquariumHeight) {
+    const fishColors = [
+        { body: 0xff5a00, fin: 0xff8c40 },  // オレンジ＆イエロー（ゴールデンファイヤー）
+        { body: 0x3a86ff, fin: 0x00f5d4 },  // 青＆水色（ブルーネオン）
+        { body: 0xff006e, fin: 0x8338ec },  // ピンク＆紫（レッドフレーム）
+        { body: 0xffbe0b, fin: 0xfb5607 },  // 黄色＆オレンジ（サンバースト）
+        { body: 0x00bbf9, fin: 0xfee440 },  // 水色＆黄色（トロピカルダスク）
+        { body: 0x9b5de5, fin: 0xf15bb5 },  // 紫＆ピンク（ミスティックグロー）
+    ];
     
-    // 色が指定されていない場合は鮮やかな黄緑色をデフォルトに
-    const color = plantColor || new THREE.Color(0x7cfc00);
+    // 初期の魚を削除
+    fishes.forEach(fish => scene.remove(fish));
+    fishes = [];
     
-    // 密度係数を元に水草の数を計算
-    // 密度2.0なら標準の2倍の水草が生成される
-    const baseHygrophilaCount = 5;
-    const baseWillowMossCount = 4;
-    const baseVallisneriaCount = 3;
-    
-    // ハイグロフィアの配置
-    const hygrophilaCount = Math.floor(baseHygrophilaCount * params.plantDensity);
-    for (let i = 0; i < hygrophilaCount; i++) {
+    // 新しい魚を追加
+    for (let i = 0; i < params.fishCount; i++) {
+        const colorIndex = Math.floor(Math.random() * fishColors.length);
+        const { body, fin } = fishColors[colorIndex];
+        
+        const size = 0.6 + Math.random() * 0.4;
+        
+        // 水槽内のランダムな位置
         const x = (Math.random() - 0.5) * (aquariumSize - 2);
+        const y = 1 + Math.random() * (aquariumHeight - 2);
         const z = (Math.random() - 0.5) * (aquariumSize - 2);
         
-        const height = 2.0 + Math.random() * 1.5;
-        const radius = 0.2 + Math.random() * 0.3;
+        const position = new THREE.Vector3(x, y, z);
+        const fish = createFish(size, body, fin, position);
         
-        // 設定された種類の数までの範囲でランダム選択
-        const variety = Math.floor(Math.random() * Math.min(5, params.plantVariety));
+        // 魚の向きをランダムに
+        fish.rotation.y = Math.random() * Math.PI * 2;
         
-        const plant = createHygrophila(height, radius, 5, color, variety);
-        plant.position.set(x, 0.1, z);
-        
-        scene.add(plant);
-        plants.push(plant);
-    }
-    
-    // バリスネリア（params.plantVarietyが2以上の場合のみ）
-    if (params.plantVariety >= 2) {
-        const vallisneriaCount = Math.floor(baseVallisneriaCount * params.plantDensity);
-        for (let i = 0; i < vallisneriaCount; i++) {
-            const x = (Math.random() - 0.5) * (aquariumSize - 2);
-            const z = (Math.random() - 0.5) * (aquariumSize - 2);
-            
-            const height = 3.5 + Math.random() * 2.0; // より長い水草
-            const radius = 0.1 + Math.random() * 0.2;
-            
-            const plant = createVallisneria(height, radius, color);
-            plant.position.set(x, 0.1, z);
-            
-            scene.add(plant);
-            plants.push(plant);
-        }
-    }
-    
-    // ウィローモスの配置
-    const willowMossCount = Math.floor(baseWillowMossCount * params.plantDensity);
-    for (let i = 0; i < willowMossCount; i++) {
-        const x = (Math.random() - 0.5) * (aquariumSize - 3);
-        const z = (Math.random() - 0.5) * (aquariumSize - 3);
-        
-        const size = 0.4 + Math.random() * 0.3;
-        
-        const moss = createWillowMoss(size, color);
-        moss.position.set(x, 0.05, z);
-        
-        scene.add(moss);
-        plants.push(moss);
+        scene.add(fish);
+        fishes.push(fish);
     }
 }
 
-// 魚の数を更新する関数
-function updateFishCount(count, aquariumSize, aquariumHeight) {
-    if (count < fishes.length) {
-        // 魚を減らす
-        while (fishes.length > count) {
-            const fish = fishes.pop();
-            scene.remove(fish);
+// init関数の追加
+function init() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111122); // 暗い背景でコントラストを強調
+    clock = new THREE.Clock();
+
+    // カメラ
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, params.cameraY, params.cameraZ);
+
+    // レンダラー
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    // コントロール
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 0, 0);
+
+    // ライト設定
+    scene.add(new THREE.AmbientLight(0xffffff, 1.2)); // 環境光
+    
+    // メインの指向性ライト
+    const mainLight = new THREE.DirectionalLight(0xffffff, params.lightIntensity);
+    mainLight.position.set(0, 25, 0);
+    mainLight.target.position.set(0, 0, 0);
+    scene.add(mainLight);
+    scene.add(mainLight.target);
+    
+    // 補助ライト
+    const fillLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
+    scene.add(fillLight);
+    
+    // 太陽光の参照は残す（Waterオブジェクトで使用）
+    sun = new THREE.Vector3(0, params.sunY, 0);
+
+    // 水槽サイズを定義
+    const aquariumSize = 20;
+    const aquariumHeight = 8;
+
+    // 水のボリューム表現
+    const waterVolumeGeometry = new THREE.BoxGeometry(aquariumSize, aquariumHeight, aquariumSize);
+    const waterVolumeMaterial = new THREE.MeshPhysicalMaterial({
+        color: new THREE.Color(params.waterColor),
+        metalness: 0.0,
+        roughness: 0.0,
+        transmission: 0.99,
+        transparent: true,
+        opacity: params.waterOpacity,
+        ior: 1.33,
+        attenuationColor: new THREE.Color(0x056f92),
+        attenuationDistance: 15.0,
+    });
+    waterVolume = new THREE.Mesh(waterVolumeGeometry, waterVolumeMaterial);
+    waterVolume.position.y = aquariumHeight / 2;
+    scene.add(waterVolume);
+
+    // 砂地
+    const sandSize = aquariumSize - 0.5;
+    const sandSegments = 80;
+    const sandHeight = 0.3;
+    const sandGeometry = generateSandGeometry(sandSize, sandSegments, sandHeight);
+    const sandMaterial = new THREE.MeshStandardMaterial({
+        color: 0xfbecc4,
+        roughness: 0.8,
+        metalness: 0.1,
+    });
+    sand = new THREE.Mesh(sandGeometry, sandMaterial);
+    sand.rotation.x = -Math.PI / 2;
+    sand.position.y = 0.1;
+    scene.add(sand);
+
+    // 水面
+    const waterGeometry = new THREE.PlaneGeometry(aquariumSize - 0.5, aquariumSize - 0.5, 32, 32);
+    water = new Water(waterGeometry, {
+        textureWidth: 512,
+        textureHeight: 512,
+        waterNormals: new THREE.TextureLoader().load(
+            'https://threejs.org/examples/textures/waternormals.jpg',
+            function (texture) {
+                texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+            }
+        ),
+        sunDirection: new THREE.Vector3(0, 1, 0),
+        sunColor: 0xffffff,
+        waterColor: new THREE.Color(params.waterColor),
+        distortionScale: 1.5,
+        fog: false,
+    });
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = aquariumHeight - 0.1;
+    scene.add(water);
+    
+    // 上からの照明
+    const topLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    topLight.position.set(0, 25, 0);
+    topLight.target.position.set(0, 0, 0);
+    scene.add(topLight);
+    scene.add(topLight.target);
+
+    // コースティクステクスチャをロード
+    const textureLoader = new THREE.TextureLoader();
+    causticTexture = textureLoader.load(
+        'https://threejs.org/examples/textures/waterdudv.jpg',
+        function(texture) {
+            texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(5, 5);
+            
+            const causticPlane = new THREE.Mesh(
+                new THREE.PlaneGeometry(aquariumSize - 1, aquariumSize - 1),
+                new THREE.MeshBasicMaterial({
+                    map: texture,
+                    transparent: true,
+                    opacity: 0.7,
+                    blending: THREE.AdditiveBlending,
+                })
+            );
+            causticPlane.rotation.x = -Math.PI / 2;
+            causticPlane.position.y = 0.15;
+            scene.add(causticPlane);
         }
-    } else if (count > fishes.length) {
-        // 魚を増やす
-        const fishColors = [
-            { body: 0xff5a00, fin: 0xff8c40 },
-            { body: 0x3a86ff, fin: 0x00f5d4 },
-            { body: 0xff006e, fin: 0x8338ec },
-            { body: 0xffbe0b, fin: 0xfb5607 },
-            { body: 0x00bbf9, fin: 0xfee440 },
-            { body: 0x9b5de5, fin: 0xf15bb5 },
-        ];
-        
-        while (fishes.length < count) {
-            const colorIndex = Math.floor(Math.random() * fishColors.length);
-            const { body, fin } = fishColors[colorIndex];
-            
-            const size = 0.6 + Math.random() * 0.4;
-            
-            // 水槽内のランダムな位置
-            const x = (Math.random() - 0.5) * (aquariumSize - 2);
-            const y = 1 + Math.random() * (aquariumHeight - 2);
-            const z = (Math.random() - 0.5) * (aquariumSize - 2);
-            
-            const position = new THREE.Vector3(x, y, z);
-            const fish = createFish(size, body, fin, position);
-            
-            // 魚の向きをランダムに
-            fish.rotation.y = Math.random() * Math.PI * 2;
-            
-            scene.add(fish);
-            fishes.push(fish);
+    );
+    
+    // 光の光柱を作成
+    createLightShafts(aquariumSize, aquariumHeight);
+
+    // レンダラーの設定
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    
+    // 光の反射を強化
+    const reflectionProbe = new THREE.HemisphereLight(
+        0xffffff, 0x444444, 1.5
+    );
+    scene.add(reflectionProbe);
+    
+    // メインライトに影の設定を追加
+    mainLight.castShadow = true;
+    mainLight.shadow.mapSize.width = 1024;
+    mainLight.shadow.mapSize.height = 1024;
+    mainLight.shadow.camera.near = 10;
+    mainLight.shadow.camera.far = 40;
+    mainLight.shadow.camera.left = -10;
+    mainLight.shadow.camera.right = 10;
+    mainLight.shadow.camera.top = 10;
+    mainLight.shadow.camera.bottom = -10;
+    
+    // 補助ライト
+    const sideLight = new THREE.DirectionalLight(0xffffcc, 1.0);
+    sideLight.position.set(15, 8, 0);
+    scene.add(sideLight);
+    
+    // 物体が光をより反射するように
+    sand.receiveShadow = true;
+    sand.material.emissive = new THREE.Color(0x111111);
+
+    // GUI
+    const gui = new GUI();
+    gui.addColor(params, 'waterColor').name('Water Color').onChange(val => {
+        water.material.uniforms.waterColor.value.set(val);
+        waterVolume.material.color.set(val);
+    });
+
+    gui.add(params, 'waterOpacity', 0.05, 0.5).name('Water Density').onChange(val => {
+        waterVolume.material.opacity = val;
+    });
+    
+    // 光の強度操作
+    gui.add(params, 'lightIntensity', 0.5, 3.0).name('Light Intensity').onChange(val => {
+        mainLight.intensity = val;
+        sideLight.intensity = val * 0.6;
+        reflectionProbe.intensity = val;
+    });
+    
+    // カメラ位置を調整
+    camera.position.set(0, 4, 12);
+    controls.target.set(0, 3, 0);
+    controls.update();
+
+    // 環境設定のGUI
+    const environmentFolder = gui.addFolder('Environment');
+    
+    environmentFolder.add(params, 'plantDensity', 0.1, 2.0).name('Plant Density').onChange(val => {
+        createPlants(aquariumSize);
+        createRocks(aquariumSize);
+    });
+    
+    environmentFolder.add(params, 'plantVariety', 1, 5).step(1).name('Plant Variety').onChange(val => {
+        createPlants(aquariumSize);
+    });
+    
+    // 水草の色
+    const vibrantGreen = new THREE.Color(0x7cfc00);
+    environmentFolder.addColor({plantColor: '#7cfc00'}, 'plantColor').name('Plant Color').onChange(val => {
+        plants.forEach(plant => {
+            plant.traverse(child => {
+                if (child instanceof THREE.Mesh && child.material) {
+                    if (child.material.color) {
+                        if (child.material.color.g > 0.5) {
+                            child.material.color.set(val);
+                        } else {
+                            const stemColor = new THREE.Color(val);
+                            stemColor.multiplyScalar(0.7);
+                            child.material.color.set(stemColor);
+                        }
+                    }
+                } else if (child instanceof THREE.Points && child.material) {
+                    child.material.color.set(val);
+                }
+            });
+        });
+    });
+
+    // 初期化時に水槽の要素を追加
+    createFishes(aquariumSize, aquariumHeight);
+    createPlants(aquariumSize, vibrantGreen);
+    createRocks(aquariumSize);
+
+    window.addEventListener('resize', onWindowResize);
+    
+    // カメラ位置監視関数
+    controls.addEventListener('change', function() {
+        const isUnderwater = camera.position.y < water.position.y;
+        if (isUnderwater) {
+            scene.fog = new THREE.FogExp2(0x004466, 0.05);
+            scene.background = new THREE.Color(0x004466);
+        } else {
+            scene.fog = null;
+            scene.background = new THREE.Color(0x111122);
         }
-    }
+    });
+    
+    animate();
 }
 
 try {
