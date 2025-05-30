@@ -16,7 +16,7 @@ const params = {
     cameraZ: 16,
     fishSpeed: 0.6,         // 魚の泳ぐ速さ
     fishCount: 8,           // 魚の数
-    plantDensity: 0.7,      // 水草の密度
+    plantDensity: 5,      // 水草の密度
     plantVariety: 3,        // 水草の種類の数
     lightIntensity: 1.5,    // 光の強度
     lightShaftOpacity: 0.4,  // 光柱の不透明度（追加）
@@ -488,8 +488,8 @@ function createPlants(aquariumSize, plantColor) {
     plants.forEach(plant => scene.remove(plant));
     plants = [];
     
-    // 色が指定されていない場合は鮮やかな黄緑色をデフォルトに
-    const color = plantColor || new THREE.Color(0x7cfc00);
+    // 色が指定されていない場合は鮮やかな紫をデフォルトに
+    const color = plantColor || new THREE.Color(0x9900ff);
     
     // 密度係数を元に水草の数を計算
     // 密度2.0なら標準の2倍の水草が生成される
@@ -591,7 +591,7 @@ function createRocks(aquariumSize) {
     }
     
     // いくつかの石にウィローモスを配置
-    const mossColor = new THREE.Color(0x7cfc00); // 鮮やかな黄緑色
+    const mossColor = new THREE.Color(0x9900ff); // 鮮やかな紫
     for (let i = 0; i < largeRockCount; i++) {
         if (Math.random() > 0.5) {
             const rock = rocks[i];
@@ -905,7 +905,7 @@ function init() {
     // 環境設定のGUI
     const environmentFolder = gui.addFolder('Environment');
     
-    environmentFolder.add(params, 'plantDensity', 0.1, 2.0).name('Plant Density').onChange(val => {
+    environmentFolder.add(params, 'plantDensity', 0.1, 10.0).name('Plant Density').onChange(val => {
         createPlants(aquariumSize);
         createRocks(aquariumSize);
     });
@@ -915,8 +915,8 @@ function init() {
     });
     
     // 水草の色
-    const vibrantGreen = new THREE.Color(0x7cfc00);
-    environmentFolder.addColor({plantColor: '#7cfc00'}, 'plantColor').name('Plant Color').onChange(val => {
+    const vibrantGreen = new THREE.Color(0x9900ff);
+    environmentFolder.addColor({plantColor: '#0x9900ff'}, 'plantColor').name('Plant Color').onChange(val => {
         plants.forEach(plant => {
             plant.traverse(child => {
                 if (child instanceof THREE.Mesh && child.material) {
